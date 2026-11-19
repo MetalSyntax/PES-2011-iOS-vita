@@ -11,6 +11,7 @@ Leer `PORTING_PLAN.md` antes de tocar nada; el estado y la bitácora están en `
   `../HAWX-vita/tools/sync_runtime.sh .`). Propios de este juego: `source/port_config.h`, `source/patch.c`.
 - `tools/ios_prep.py` (rebase.bin/binds.bin), `tools/nib_prep.py`, `tools/gen_cxx.py`,
   `tools/stage_data.sh` (arma `ux0_data/pes2011ios/`), `tools/deploy_data.py` (FTP, `--logs`).
+- `hosttest/` = loader en Linux ARM32 (Docker): `hosttest/run.sh build` y `hosttest/run.sh run [s]`, logs en build/hosttest-data/pes2011ios/logs y capturas en build/hosttest-data/frames; ver "../Docs/Prueba-ARM32-sin-consola.md".
 - `game_app/` = `Payload/PES2011.app` del IPA (gitignored).
 - En la Vita: `ux0:data/pes2011ios/{game_app/, rebase.bin, binds.bin, nib.txt, nibs/, controls.txt, Documents/, logs/}`.
 
@@ -19,5 +20,5 @@ Leer `PORTING_PLAN.md` antes de tocar nada; el estado y la bitácora están en `
   pila alineada a 4 (todo lo nuestro entra por `ml_align_call`), int64 sin alinear a par de registros.
 - Struct > 4 bytes se devuelve por puntero oculto (`objc_msgSend_stret`): la IMP nativa recibe `(ret*, self, _cmd, ...)`.
 - Crash: PC − 0x98000000 = dirección en el Mach-O. Dirección de datos < 0x02000000 = rebase faltante (`report.txt`).
-- Nada del IPA ni derivados al repo. Un bug por corrida de consola, guiado por el log. Nunca Vita3K.
+- Nada del IPA ni derivados al repo. Un bug por corrida de consola, guiado por el log. Nunca Vita3K (sí el hosttest antes de ir a consola).
 - Build: `export VITASDK=$HOME/vitasdk; cmake -S . -B build && make -C build`.

@@ -7,11 +7,14 @@
 // cola mezcla (remuestreo lineal a 48 kHz estéreo) hacia un puerto MAIN de sceAudioOut, y llama al
 // callback del juego cuando un buffer se consumió.
 // AudioFileStream (parser en memoria) no está: devuelve error y el juego queda sin esa música.
+// AudioFileOpenWithCallbacks (Airplay/Marmalade: MP3 dentro de los .group.bin, leído con s3eFile) copia el
+// archivo entero a memoria al abrir y lo decodifica con mpg123, presentándolo también como LPCM.
 #include <psp2/audioout.h>
 #include <psp2/kernel/threadmgr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <mpg123.h>
 #include <vorbis/vorbisfile.h>
 
 #include "foundation.h"
@@ -67,8 +70,11 @@ static int as_GetProperty(uint32_t pid, uint32_t *size, void *data) {
 // ---------------------------------------------------------------- AudioFile (.ogg / .wav)
 
 typedef struct {
-    int kind; // 1 ogg, 2 wav
+    int kind; // 1 ogg, 2 wav, 3 mp3 en memoria
     OggVorbis_File vf;
+    mpg123_handle *mh;
+    uint8_t *mem;
+    long mem_len, mem_pos;
     FILE *f;
     long data_off, data_len, pos_frames;
     int channels, rate;
@@ -169,7 +175,10 @@ static int af_Close(audio_file *a) {
         return 0;
     if (a->kind == 1)
         ov_clear(&a->vf);
-    else if (a->f)
+    else if (a->kind == 3) {
+        mpg123_delete(a->mh);
+        free(a->mem);
+    } else if (a->f)
         fclose(a->f);
     free(a);
     return 0;
@@ -234,6 +243,16 @@ static long read_frames(audio_file *a, int64_t start, long nframes, int16_t *out
                 break;
             got += r / (2 * a->channels);
         }
+    } else if (a->kind == 3) {
+        if (a->pos_frames != start)
+            mpg123_seek(a->mh, start, SEEK_SET);
+        while (got < nframes) {
+            size_t done = 0;
+            int r = mpg123_read(a->mh, (unsigned char *)(out + got * a->channels), (nframes - got) * 2 * a->channels, &done);
+            got += done / (2 * a->channels);
+            if (r != MPG123_OK && r != MPG123_NEW_FORMAT)
+                break;
+        }
     } else {
         fseek(a->f, a->data_off + start * 2 * a->channels, SEEK_SET);
         got = fread(out, 2 * a->channels, nframes, a->f);
@@ -263,6 +282,67 @@ static int af_ReadBytes(audio_file *a, int cache, uint32_t start_lo, uint32_t st
     long got = read_frames(a, start, *io_bytes / fb, buf);
     *io_bytes = got * fb;
     return got ? 0 : ERR_EOF;
+}
+// mpg123 sobre el buffer en memoria (lector propio: sin E/S de archivos)
+static mpg123_ssize_t mem_read(void *h, void *buf, size_t n) {
+    audio_file *a = h;
+    if (n > (size_t)(a->mem_len - a->mem_pos))
+        n = a->mem_len - a->mem_pos;
+    memcpy(buf, a->mem + a->mem_pos, n);
+    a->mem_pos += n;
+    return n;
+}
+static off_t mem_lseek(void *h, off_t off, int whence) {
+    audio_file *a = h;
+    off_t p = whence == SEEK_SET ? off : whence == SEEK_CUR ? a->mem_pos + off : a->mem_len + off;
+    if (p < 0 || p > a->mem_len)
+        return -1;
+    return a->mem_pos = p;
+}
+static int mp3_open(audio_file *a) {
+    static int inited;
+    long rate;
+    int ch, enc;
+    if (!inited++)
+        mpg123_init();
+    if (!(a->mh = mpg123_new(NULL, NULL)))
+        return -1;
+    mpg123_replace_reader_handle(a->mh, mem_read, mem_lseek, NULL);
+    mpg123_param(a->mh, MPG123_FLAGS, MPG123_FORCE_STEREO, 0); // la cola de audio espera un formato fijo
+    if (mpg123_open_handle(a->mh, a) != MPG123_OK || mpg123_getformat(a->mh, &rate, &ch, &enc) != MPG123_OK)
+        return -1;
+    mpg123_format_none(a->mh);
+    mpg123_format(a->mh, rate, MPG123_STEREO, MPG123_ENC_SIGNED_16);
+    mpg123_scan(a->mh); // largo exacto (sin cabecera Xing la estimación falla)
+    a->kind = 3;
+    a->rate = rate;
+    a->channels = 2;
+    a->frames = mpg123_length(a->mh);
+    return a->frames > 0 ? 0 : -1;
+}
+// AudioFileOpenWithCallbacks(ud, read, write, getSize, setSize, typeHint, AudioFileID *out)
+// read: OSStatus (ud, SInt64 pos, UInt32 n, void *buf, UInt32 *got) (SInt64 en r1:r2); getSize: SInt64 (ud)
+static int af_OpenWithCallbacks(void *ud, void *rd, void *wr, void *get_size, void *set_size, uint32_t hint,
+                                audio_file **out) {
+    *out = NULL;
+    long len = get_size ? (long)call_guest(get_size, (uint32_t)ud, 0, 0, 0) : 0;
+    audio_file *a = calloc(1, sizeof(*a));
+    a->mem = len > 0 ? malloc(len) : NULL;
+    for (uint32_t got = 0; a->mem && a->mem_len < len; a->mem_len += got) {
+        uint32_t n = len - a->mem_len > 0x10000 ? 0x10000 : len - a->mem_len;
+        got = 0;
+        if (call_guest6(rd, (uint32_t)ud, a->mem_len, 0, n, (uint32_t)(a->mem + a->mem_len), (uint32_t)&got) || !got)
+            break;
+    }
+    if (!a->mem || a->mem_len != len || mp3_open(a)) {
+        l_error("AudioFileOpenWithCallbacks('%c%c%c%c', %ld bytes, leídos %ld): no es un MP3 decodificable",
+                hint >> 24, hint >> 16, hint >> 8, hint, len, a->mem_len);
+        af_Close(a);
+        return ERR_UNSUPPORTED;
+    }
+    l_info("AudioFile (callbacks) MP3: %d Hz, %lld frames, %ld bytes", a->rate, (long long)a->frames, len);
+    *out = a;
+    return 0;
 }
 static int af_StreamOpen(void *ud, void *prop_cb, void *pkt_cb, uint32_t hint, void **out) {
     l_error("AudioFileStreamOpen: sin soporte (música por streaming en memoria)");
@@ -492,7 +572,7 @@ const import_entry audio_imports[] = {
     F(AudioSessionRemovePropertyListener, as_ok), F(AudioSessionGetPropertySize, as_ok),
     F(AudioServicesPlayAlertSound, as_ok), F(AudioServicesPlaySystemSound, as_ok),
     F(AudioServicesCreateSystemSoundID, as_ok), F(AudioServicesDisposeSystemSoundID, as_ok),
-    F(AudioFileOpenURL, af_OpenURL), F(AudioFileClose, af_Close), F(AudioFileGetProperty, af_GetProperty),
+    F(AudioFileOpenURL, af_OpenURL), F(AudioFileOpenWithCallbacks, af_OpenWithCallbacks), F(AudioFileClose, af_Close), F(AudioFileGetProperty, af_GetProperty),
     F(AudioFileGetPropertyInfo, af_GetPropertyInfo), F(AudioFileReadPackets, af_ReadPackets),
     F(AudioFileReadPacketData, af_ReadPackets), F(AudioFileReadBytes, af_ReadBytes),
     F(AudioFileStreamOpen, af_StreamOpen), F(AudioFileStreamParseBytes, af_StreamFail),

@@ -20,6 +20,8 @@ mkdir -p "$OUT/game_app" "$OUT/Documents" "$OUT/logs"
 rsync -a --delete --exclude '._*' --exclude '.DS_Store' --exclude '_CodeSignature' --exclude 'SC_Info' \
   --exclude 'embedded.mobileprovision' --exclude 'CodeResources' --exclude 'iTunesMetadata.plist' \
   --exclude '*.ogg.tmp' "$APP/" "$OUT/game_app/"
+# foundation.c solo lee plist binario (bplist00); los IPA viejos traen Info.plist en XML
+find "$OUT/game_app" -name '*.plist' ! -name '._*' -exec plutil -convert binary1 {} \;
 python3 -I tools/ios_prep.py "$OUT/game_app/$EXEC" "$OUT" | head -12
 [ -f "$APP/MainWindow.nib" ] && python3 -I tools/nib_prep.py "$APP/MainWindow.nib" "$OUT/nib.txt" > /dev/null || rm -f "$OUT/nib.txt"
 # nibs de UIViewController (initWithNibName:): nibs/<nombre>.txt

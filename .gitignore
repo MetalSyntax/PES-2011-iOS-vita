@@ -54,4 +54,6 @@ cmake-build-*/
 /decompiled/
 binds.bin
 report.txt
-
+hosttest
+*.webp
+*.avif

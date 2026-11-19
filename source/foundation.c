@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -2215,6 +2216,11 @@ static id cf_stringCreateWithCString(void *a, const char *s, int enc) {
     return str_init_bytes(objc_alloc(c_NSString), s, strlen(s), enc == 0x08000100 ? ENC_UTF8 : enc == 0x0201 ? ENC_LATIN1 : ENC_UTF8);
 }
 static int cf_stringGetLength(id s) { return s_length(s, NULL); }
+// CFStringCompare(a, b, flags): kCFCompareCaseInsensitive = 1; resultado -1/0/1
+static int cf_stringCompare(id a, id b, unsigned flags) {
+    int r = (flags & 1 ? strcasecmp : strcmp)(a ? ns_cstr(a) : "", b ? ns_cstr(b) : "");
+    return (r > 0) - (r < 0);
+}
 static double cf_absTime(void) { return ns_now(); }
 static id cf_localeCopyCurrent(void) { return objc_retain(cur_locale); }
 static id cf_localeGetValue(id loc, id key) { return lc_objectForKey(loc, NULL, key); }
@@ -2307,7 +2313,7 @@ const import_entry foundation_imports[] = {
     F(CFBundleCopyResourceURL, cf_bundleCopyResourceURL), F(CFURLCopyFileSystemPath, cf_urlPath),
     F(CFURLCreateFromFileSystemRepresentation, cf_urlFromFS), F(CFURLGetFileSystemRepresentation, cf_urlGetFS),
     F(CFStringGetCString, cf_stringGetCString), F(CFStringGetCStringPtr, cf_stringGetCStringPtr),
-    F(CFStringCreateWithCString, cf_stringCreateWithCString), F(CFStringGetLength, cf_stringGetLength),
+    F(CFStringCreateWithCString, cf_stringCreateWithCString), F(CFStringGetLength, cf_stringGetLength), F(CFStringCompare, cf_stringCompare),
     F(CFAbsoluteTimeGetCurrent, cf_absTime), F(CFLocaleCopyCurrent, cf_localeCopyCurrent),
     F(CFLocaleGetSystem, cf_localeCopyCurrent), F(CFLocaleGetValue, cf_localeGetValue),
     F(CFRunLoopGetCurrent, cf_runLoopGetCurrent), F(CFRunLoopGetMain, cf_runLoopGetCurrent),
