@@ -46,8 +46,13 @@ static void *p_realloc(void *o, size_t n) {
     return r;
 }
 
+// zlib de vitasdk (z_stream = 56 bytes en Darwin 32 bits y newlib). Corrida #5: menuLoad/menuLoadPES (botón
+// "siguiente" tras elegir controles) llama inflate y, sin él, la carga no termina y no se presentan más frames.
+void inflate(void), inflateEnd(void), inflateInit2_(void), inflateInit_(void), tzset(void);
+
 const import_entry patch_imports[] = {
     F(malloc, p_malloc), F(calloc, p_calloc), F(realloc, p_realloc),
+    D(inflate), D(inflateEnd), D(inflateInit2_), D(inflateInit_), D(tzset),
 };
 TABLE_END(patch)
 
@@ -73,7 +78,28 @@ static uint32_t p_sqlite3_prepare_v2(uint32_t db, const char *sql, uint32_t n, u
     return r;
 }
 
+// Corrida #4 (dump 0x0000442d5f, stop 0x10006): el hilo de carga corría código de la app con SP = 0x81d7c678 (heap)
+// y su pila real es 0x94b01000-0x94d01000; la Vita mata un hilo con SP fuera de su pila. Es el StackSwitch de s3e:
+// 0x8be0 crea con 0x1fa54(entry, size = icf StackSize, arg, buf) una fibra para la app y, con buf = 0, la pila sale
+// del heap de s3e (0x2b6f8). Apagar StackSwitch no sirve en Airplay 4.3 (los trampolines 0x35690 usan igual la pila
+// guardada en 0xa0daf0). Se le da un buf dentro de la pila real del hilo de carga (2 MB, aquí SP aún está arriba):
+// 512 KB bajo el SP actual quedan para el lado sistema (s3e vuelve a la pila original en cada llamada al SO).
+#define FIBER_SYS_RESERVE (512 * 1024)
+#define FIBER_MIN_STACK (256 * 1024)
+static uintptr_t fiber_orig;
+static uint32_t p_s3e_fiber_create(uint32_t entry, uint32_t size, uint32_t arg, uint32_t buf) {
+    if (!buf) {
+        if (size < FIBER_MIN_STACK)
+            size = FIBER_MIN_STACK;
+        // ponytail: asume que el hilo creador tiene >= 512 KB + size libres bajo SP (el de carga pide 2 MB)
+        buf = (((uint32_t)__builtin_frame_address(0) - FIBER_SYS_RESERVE - size) & ~0xfffu);
+        l_info("s3e: pila de la fibra %u KB en la pila del hilo (0x%08x)", size / 1024, buf);
+    }
+    return call_guest((void *)fiber_orig, entry, size, arg, buf);
+}
+
 void patch_init(void) {
+    fiber_orig = hook_keep_arm(0x1fa54, (void *)p_s3e_fiber_create);
     // datos s3e en claro en el binario de staging (0xa1bbd4 = 0x6ff4c rebaseado). Con el PES2011 original
     // (cifrado) en la Vita se llama a basura en los constructores (corrida #2: pc 0xeefd6860 desde 0x240b18)
     if (*(uint32_t *)(0xa1bbd4 + MACHO_SLIDE) != 0x6ff4c + MACHO_SLIDE)

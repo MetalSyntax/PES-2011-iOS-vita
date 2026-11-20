@@ -1,0 +1,6 @@
+# Raíces de código confirmadas (dirección del Mach-O; impar = Thumb). Las lee tools/ios_prep.py.
+# Hojas ARM (push {r4-r9} sin lr) del rasterizado/texturizado por software de IwGx: sin raíz, `eoreq ip,ip,r2,lsr #20`
+# (0x002cca22, a +0x50) se rebaseaba como puntero -> texturas despegadas/picos en los jugadores (= PES 2012 #121).
+0xb55f8   # 0xb5648
+0xec704   # 0xec754
+0xeca74   # 0xecac4

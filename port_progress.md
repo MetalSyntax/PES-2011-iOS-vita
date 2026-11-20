@@ -77,9 +77,75 @@ El port Android sigue en `../Incompletes/PES-2011-vita` (bloqueado en Bug 011, `
   nombre de hilo en el crash.
 - Hosttest: llega al menú principal (Exhibition) con música, sin crash en 420 s. Subidos datos y eboot.
 
-## PENDIENTE EN CONSOLA (corrida iOS #4)
+### Corrida #4 (`logs/pes2011ios_004.log`, dump 0x0000442d5f)
+- Llega a `menuSplash` (12 s) y el proceso muere sin excepción de CPU: hilo de carga con stop `0x10006`, PC en un
+  bucle normal de color-key (0x1cb854 ← 0x1b6a98), principal en su `DelayThread`, el watchdog no saltó.
+- `0x10006` = SP fuera de la pila del hilo (igual que PES 2012/CNK2): SP = 0x81d7c678 (heap) y la pila real del hilo
+  es 0x94b01000-0x94d01000 (campos 0x38/0x3c de THREAD_INFO del dump). Es el StackSwitch de s3e: 0x8be0 crea con
+  0x1fa54(entry, size = icf `StackSize` 0x8000, arg, buf) la fibra de la app y, con buf = 0, la pila sale del heap de
+  s3e (0x2b6f8, "Stack").
+- Apagar StackSwitch (strb de 0x372a4 a `[*0xa00bbc+0x60]`, forzado a 1 sin icf) NO sirve en Airplay 4.3: los
+  trampolines (0x35690) siguen cambiando SP a `*(0xa0daf0)`, que solo se llena en el camino con fibra → segfault en
+  el hosttest (addr 0xfffffffc).
+- Fix (`patch.c`): hook de 0x1fa54; con buf = 0 se pasa un buffer dentro de la pila real del hilo de carga (512 KB bajo
+  el SP actual, mínimo 256 KB de fibra). Log: `s3e: pila de la fibra 256 KB en la pila del hilo`.
+- hosttest: `HOSTTEST_LANG=3` (idioma del sistema, español como la consola) y `sigaltstack` en el handler de crash
+  (un desborde de pila ahora también imprime PC/LR). Con save nuevo en español: título, toque y menú principal
+  (Exhibition) sin crash en 130 s.
 
-1. `tools/stage_data.sh` regenera `ux0_data/` (re-descifra el Mach-O de staging y `rebase.bin`). Subir con `python3 -I tools/deploy_data.py` (sube `ux0_data/pes2011ios/` → `ux0:data/pes2011ios/`; el PES2011 de `game_app/` cambia: datos s3e descifrados).
-2. Instalar `build/pes2011ios.vpk` (TITLEID `PSVPES11I`, convive con el Android).
-3. Abrir el juego, traer logs y dump con `python3 -I tools/deploy_data.py --logs`. Objetivo: confirmar la pantalla de título en hardware y el texto estirado. Decir si crasheó o quedó congelado.
-4. En un crash: PC − 0x98000000 = dirección en el Mach-O; dirección de datos < 0x02000000 = rebase faltante (buscar en `ux0_data/pes2011ios/report.txt`). Llamadas a selectores/símbolos no implementados salen en el log como `unimpl`.
+### Corrida #5 (`logs/pes2011ios_005.log`)
+- El fix de la fibra funciona en consola: título, menú principal y pantalla de controles. Al pulsar "siguiente"
+  carga `menuLoad`/`menuLoadPES`, llama `_inflateInit_`/`_inflate` (sin implementar) y no presenta más frames
+  (434 fijos de 30 s a 140 s; el run loop seguía vivo según `wd.txt`). Sin dump propio (el que bajó era de PSVGRI001,
+  movido a `logs/otros/`).
+- Fix (`patch.c`): `inflate`, `inflateEnd`, `inflateInit2_`, `inflateInit_` y `tzset` de vitasdk (como PES 2012).
+- hosttest (save en español, toques convertidos: pantalla x = 72 + gy·1,7, y = (320 − gx)·1,7): controles → siguiente
+  → selección de equipo (`menuTeam4`, `bodyMenu`) sin cuelgue.
+
+### Corrida #6 (`logs/pes2011ios_006.log`): llega al partido (Exhibición). Picos en los jugadores (= PES 2012)
+- Sin crash; el dump bajado era de PSVGRI001 (`logs/otros/`). Picos/triángulos que cruzan la pantalla desde los
+  jugadores, intermitentes (selección de equipo e ingame).
+- **Reproducido en el hosttest (Mesa)**: es CPU, no vitaGL. Diagnóstico en el hosttest (código temporal, ya quitado):
+  detector de vértices atípicos en glDrawElements + watchpoint por software que emula los stores (psp2_fake.c,
+  `hosttest_watch`) + hook de 0x1cac30 (M·v del skinning). Cadena: skinning de 1/2/3 huesos (0xe7354…) → matriz del
+  hueso ×50 (0xfd1a8, desde el cuaternión en bone+28 vía 0x1cd0fc) → buffers de poses 0xa1ec44 / 0xa1fa44 → **SLERP
+  0x1bd6c0** → `sin` de IwGeom (0x7a07c) con **tabla u16 en 0xa18800 con 3 palabras rebaseadas** (sin[2..7] = 12,18 |
+  25,31 | 37,43 parecen punteros): sin(1-2°) ≈ 9,5 → cuaternión ×7 cuando dos keyframes casi coinciden.
+- Fix: `tools/rebase_skip.txt` (nuevo, lo lee `ios_prep.py`): palabras que nunca se rebasean — la tabla de senos,
+  más máscaras/banderas tomadas por punteros (0x227508 = 0x102000, 0x253c1c = 0x1fc07f, 0xf4554 = 0x160010, tabla de
+  banderas 0x2b1cxx, tabla de bytes 0x2a66xx, 0x2a8f70, bitmap de fuente 0x642xx-0x645xx, tabla u16 0x2ae9a0).
+  `tools/code_roots.txt` (nuevo): 0xb55f8/0xec704/0xeca74, hojas ARM del rasterizado por software con `eoreq` rebaseado
+  (= PES 2012 #121). rebase.bin: 51461. Hosttest: 0 matrices malas y 0 draws con picos en 400; capturas limpias.
+- **PES 2012 tiene el mismo bug**: tabla de senos en 0x100c37c con 5 palabras rebaseadas (0x100c37c, 0x100c380,
+  0x100c384, 0x100c388, 0x100c3cc) — explica sus picos pendientes.
+- hosttest: con el save de la consola (`Documents/database/save.bin`) y toques convertidos (x = 72 + gy·1,7,
+  y = (320 − gx)·1,7) llega a selección de equipo; el save en inglés original quedó en `build/ht-save-en/`.
+
+### Corrida #7 (`logs/pes2011ios_007.log`): sin picos; jugadores y balón rojos/morados en los saques
+- Sin crash. Los jugadores ya no se deforman, pero en saques el balón y los jugadores salen teñidos de rojo y no vuelven.
+- Causa (`gles.c`, present): `GL_TEXTURE_2D` y `GL_TEXTURE_ENV_MODE` son por unidad en vitaGL. El present leía
+  `GL_TEXTURE_2D` de la unidad activa (la 1 si el juego dejó ahí el multitexturado) y lo aplicaba a la 0, y restauraba
+  en la 0 el último modo de env puesto en cualquier unidad. IwGx cachea el estado y no lo repone → la 0 queda mal.
+  Ferrari ya lo tenía corregido con `env_mode[2]` ("el césped usa COMBINE en la 1").
+- Fix: pasar a la unidad 0 antes de leer las caps y leer el modo con `glGetTexEnviv` (sin seguimiento propio).
+  Llevarlo a HAWX-vita/source (origen de `sync_runtime.sh`).
+- Menú de opciones SELECT+START de Ferrari (`options.c`, `font8x8.c`): tamaño de pantalla, filtro (bilinear/sharp),
+  MSAA (al reiniciar) y rotación, guardados en `ux0:data/pes2011ios/options.txt`. Sustituye a `rotation.txt`.
+- Controles físicos = PES 2012 (`ux0_data/pes2011ios/controls.txt`, mismo layout): LSTICK → joystick (101,220 r45),
+  CROSS = A (358,274), CIRCLE/SQUARE = B (440,238), START = pausa (15,15).
+
+### Corrida #8 (`logs/pes2011ios_008.log`): menú y controles OK; el tinte morado sigue en los saques
+- Sin crash (vivo a 160 s; el dump bajado no es de esta corrida). Menú SELECT+START y controles físicos funcionan.
+- El arreglo de unidades de textura del present no quitó el tinte. PES 2012 no tiene arreglo de colores que copiar
+  (su `gles.c` conserva incluso el bug de `env_mode`); su `vbo_data` con puntero interno de vitaGL no aplica aquí.
+- Hosttest: con toques automáticos no se llegó al partido (Exhibición → formación; el carrusel no gira con un toque).
+  El usuario prefiere probar en consola.
+- Diagnóstico (`gles.c`, `diag_state`/`diag_tex`, temporal): cada combinación nueva de estado GL por draw (env/combiner
+  de las unidades 0 y 1, luz, color material, niebla, blend, color array, color actual en 1.0 = 0x10) y cada formato
+  de textura nuevo → líneas `DIAG` en el log, con el número de draw.
+
+## PENDIENTE EN CONSOLA (corrida iOS #9)
+
+1. Ya subido: `eboot.bin` con el diagnóstico. Jugar hasta un saque en que se vean morados, anotar más o menos el
+   segundo, y salir. Traer logs: `python3 -I tools/deploy_data.py --ip 192.168.100.23 --logs`.
+2. Comparar las líneas `DIAG` que aparecen justo en el saque con las de antes.

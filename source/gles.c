@@ -21,6 +21,7 @@
 #include "hle.h"
 #include "imports.h"
 #include "log.h"
+#include "options.h"
 
 #define SCR_W 960
 #define SCR_H 544
@@ -36,6 +37,9 @@
 
 int fb_w = 320, fb_h = 480;
 static GLuint scr_fbo, scr_tex, scr_depth;
+static int scr_filter = -1; // filtro actual de scr_tex (draw_screen)
+static GLuint pre_tex, pre_fbo; // sharp bilinear: drawable ampliado x k con vecino más cercano
+static int pre_w, pre_h;
 
 // ---------------------------------------------------------------- arrays (GL_FIXED -> float)
 
@@ -57,7 +61,6 @@ typedef struct {
 enum { A_VTX, A_NRM, A_COL, A_TC0, A_TC1, A_N };
 static array_ptr arr[A_N];
 static int client_unit;
-static GLint env_mode = GL_MODULATE;
 static GLfixed color[4] = {0x10000, 0x10000, 0x10000, 0x10000};
 static GLuint bound_array_buffer, bound_element_buffer;
 
@@ -236,9 +239,74 @@ static const uint8_t *arr_base(const array_ptr *a);
 static int type_size(GLenum t);
 static float read_comp(const uint8_t *p, GLenum t, int i);
 
+// ponytail: diagnóstico corrida #9 (jugadores/balón morados en los saques). Registra cada combinación nueva del estado GL
+// que tiñe un draw y cada formato de textura nuevo; lo que aparezca al llegar el saque es el culpable. Quitar al resolverlo.
+static void diag_state(void) {
+    static uint32_t seen[96];
+    static int nseen;
+    GLint act, e0, c0 = 0, s0 = 0, s1 = 0, e1, c1 = 0, t1, bs, bd;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &act);
+    glActiveTexture(GL_TEXTURE0);
+    int t0 = glIsEnabled(GL_TEXTURE_2D);
+    glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &e0);
+    if (e0 == GL_COMBINE) {
+        glGetTexEnviv(GL_TEXTURE_ENV, GL_COMBINE_RGB, &c0);
+        glGetTexEnviv(GL_TEXTURE_ENV, GL_SRC0_RGB, &s0);
+        glGetTexEnviv(GL_TEXTURE_ENV, GL_SRC1_RGB, &s1);
+    }
+    glActiveTexture(GL_TEXTURE1);
+    t1 = glIsEnabled(GL_TEXTURE_2D);
+    glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &e1);
+    if (e1 == GL_COMBINE)
+        glGetTexEnviv(GL_TEXTURE_ENV, GL_COMBINE_RGB, &c1);
+    glActiveTexture(act);
+    glGetIntegerv(GL_BLEND_SRC, &bs);
+    glGetIntegerv(GL_BLEND_DST, &bd);
+    int lit = glIsEnabled(GL_LIGHTING), cm = glIsEnabled(GL_COLOR_MATERIAL), fog = glIsEnabled(GL_FOG),
+        bl = glIsEnabled(GL_BLEND), ca = glIsEnabled(GL_COLOR_ARRAY);
+    uint32_t col = (color[0] >> 12 & 0xff) << 24 | (color[1] >> 12 & 0xff) << 16 | (color[2] >> 12 & 0xff) << 8 | (color[3] >> 12 & 0xff);
+    uint32_t h = 2166136261u;
+    int v[] = {t0, e0, c0, s0, s1, t1, e1, c1, lit, cm, fog, bl, bs, bd, ca, ca ? (int)arr[A_COL].type : 0, (int)col, act};
+    for (int i = 0; i < (int)(sizeof(v) / sizeof(v[0])); i++)
+        h = (h ^ (uint32_t)v[i]) * 16777619u;
+    for (int i = 0; i < nseen; i++)
+        if (seen[i] == h)
+            return;
+    if (nseen == 96)
+        return;
+    seen[nseen++] = h;
+    l_info("DIAG estado #%d (draw %u): u0 tex%d env 0x%x comb 0x%x src 0x%x/0x%x | u1 tex%d env 0x%x comb 0x%x | act 0x%x "
+           "luz %d colmat %d niebla %d blend %d 0x%x/0x%x | colarray %d tipo 0x%x size %d | color %08x",
+           nseen, draw_calls, t0, e0, c0, s0, s1, t1, e1, c1, act, lit, cm, fog, bl, bs, bd, ca, arr[A_COL].type,
+           arr[A_COL].size, col);
+}
+static void diag_tex(const char *fn, GLint ifmt, GLenum fmt, GLenum type, int w, int h) {
+    static uint32_t seen[48];
+    static int nseen;
+    uint32_t k = (uint32_t)ifmt * 31 + fmt * 7 + type;
+    for (int i = 0; i < nseen; i++)
+        if (seen[i] == k)
+            return;
+    if (nseen < 48)
+        seen[nseen++] = k, l_info("DIAG %s: interno 0x%x formato 0x%x tipo 0x%x (%dx%d, draw %u)", fn, ifmt, fmt, type, w, h,
+                                  draw_calls);
+}
+static void g_glTexImage2D(GLenum t, GLint lvl, GLint ifmt, GLsizei w, GLsizei h, GLint b, GLenum fmt, GLenum type,
+                           const void *px) {
+    if (!lvl)
+        diag_tex("TexImage2D", ifmt, fmt, type, w, h);
+    glTexImage2D(t, lvl, ifmt, w, h, b, fmt, type, px);
+}
+static void g_glCompressedTexImage2D(GLenum t, GLint lvl, GLenum ifmt, GLsizei w, GLsizei h, GLint b, GLsizei n,
+                                     const void *px) {
+    if (!lvl)
+        diag_tex("CompressedTexImage2D", ifmt, 0, 0, w, h);
+    glCompressedTexImage2D(t, lvl, ifmt, w, h, b, n, px);
+}
 static void g_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     TR("DrawArrays(0x%x, %d, %d)", mode, first, count);
     draw_calls++;
+    diag_state();
     convert_fixed(first + count);
     int skinned = skin(first + count);
     glDrawArrays(mode, first, count);
@@ -249,6 +317,7 @@ static void g_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 static void g_glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *idx) {
     TR("DrawElements(0x%x, %d, 0x%x, %p) ebo %u", mode, count, type, idx, bound_element_buffer);
     draw_calls++;
+    diag_state();
     extern int palette_active(void);
     int need_fixed = palette_active();
     for (int k = 0; k < A_N; k++)
@@ -299,8 +368,6 @@ static void g_glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) {
     g_glColor4f(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
 }
 static void g_glTexEnvi(GLenum target, GLenum pname, GLint v) {
-    if (pname == GL_TEXTURE_ENV_MODE)
-        env_mode = v;
     glTexEnvi(target, pname, v);
 }
 static void g_glTexEnvf(GLenum target, GLenum pname, GLfloat v) {
@@ -743,6 +810,7 @@ void gles_set_size(int w, int h) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fb_w, fb_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    scr_filter = GL_LINEAR;
     glBindTexture(GL_TEXTURE_2D, 0);
     if (!scr_fbo)
         glGenFramebuffers(1, &scr_fbo);
@@ -761,29 +829,90 @@ void gles_set_size(int w, int h) {
 
 void gles_init(void) {
     vglUseTripleBuffering(GL_FALSE);
-    vglInitExtended(0, SCR_W, SCR_H, GLES_POOL_MB * 1024 * 1024, SCE_GXM_MULTISAMPLE_NONE);
+    options_load(); // MSAA se fija acá (vitaGL lo aplica a la pantalla y a todos los FBO)
+    vglInitExtended(0, SCR_W, SCR_H, GLES_POOL_MB * 1024 * 1024, options_msaa_mode());
     gles_set_size(fb_w, fb_h);
 }
 
 // Rotación del drawable a la pantalla: 0 = sin girar (drawable apaisado o juego vertical
 // centrado), 1 = landscape-right (borde superior del drawable a la izquierda), 2 = landscape-left.
-int port_rotation = PORT_ROTATION; // input.c puede cambiarla (SELECT+START) y la guarda en rotation.txt
+int port_rotation = PORT_ROTATION; // options.c (menú SELECT+START, options.txt)
 int gles_rotation(void) { return fb_w > fb_h ? 0 : port_rotation; }
 
 // Rectángulo destino en pantalla (para input.c: mismo mapeo inverso).
 void gles_dest_rect(int *x, int *y, int *w, int *h) {
     int rw = gles_rotation() ? fb_h : fb_w, rh = gles_rotation() ? fb_w : fb_h; // tamaño visto apaisado
-#if PORT_STRETCH
-    (void)rw, (void)rh;
-    *x = 0, *y = 0, *w = SCR_W, *h = SCR_H;
-#else
+    if (opt_stretch) { // options.c (PORT_STRETCH = valor por defecto)
+        *x = 0, *y = 0, *w = SCR_W, *h = SCR_H;
+        return;
+    }
     int dw = SCR_H * rw / rh;
     if (dw > SCR_W)
         dw = SCR_W;
     *w = dw, *h = SCR_H;
     *x = (SCR_W - dw) / 2, *y = 0;
-#endif
 }
+
+static void set_filter(GLuint t, GLint f) {
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
+}
+
+// Dibuja el drawable del juego en la pantalla (estado FFP ya preparado por gles_present).
+static void draw_screen(void) {
+    int dx, dy, dw, dh;
+    gles_dest_rect(&dx, &dy, &dw, &dh);
+    int rh = gles_rotation() ? fb_w : fb_h; // alto visto apaisado
+    int k = opt_filter == FILTER_SHARP ? (dh + rh - 1) / rh : 1;
+    GLuint src = scr_tex;
+    GLint want = opt_filter == FILTER_PIXEL || k > 1 ? GL_NEAREST : GL_LINEAR;
+    if (want != scr_filter)
+        set_filter(scr_tex, want), scr_filter = want;
+    static const float unit[] = {0, 0, 1, 0, 0, 1, 1, 1};
+    if (k > 1) {
+        if (pre_w != fb_w * k || pre_h != fb_h * k) {
+            pre_w = fb_w * k, pre_h = fb_h * k;
+            if (!pre_tex)
+                glGenTextures(1, &pre_tex), glGenFramebuffers(1, &pre_fbo);
+            glBindTexture(GL_TEXTURE_2D, pre_tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, pre_w, pre_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            set_filter(pre_tex, GL_LINEAR);
+            glBindFramebuffer(GL_FRAMEBUFFER, pre_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pre_tex, 0);
+            l_info("sharp bilinear: %dx%d x%d", fb_w, fb_h, k);
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, pre_fbo);
+        glViewport(0, 0, pre_w, pre_h);
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glOrthof(0, 1, 0, 1, -1, 1); // misma orientación que scr_tex: sirven las UV de rotación de abajo
+        glBindTexture(GL_TEXTURE_2D, scr_tex);
+        glVertexPointer(2, GL_FLOAT, 0, unit);
+        glTexCoordPointer(2, GL_FLOAT, 0, unit);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glLoadIdentity();
+        glOrthof(0, SCR_W, SCR_H, 0, -1, 1);
+        glMatrixMode(GL_MODELVIEW);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, SCR_W, SCR_H);
+        src = pre_tex;
+    }
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // Esquinas de pantalla (sup-izq, sup-der, inf-izq, inf-der) -> UV del FBO (v = 0 abajo en GL).
+    static const float uv_rot[3][8] = {
+        {0, 1, 1, 1, 0, 0, 1, 0}, // sin girar
+        {1, 1, 1, 0, 0, 1, 0, 0}, // landscape-right (probado en Inotia2)
+        {0, 0, 0, 1, 1, 0, 1, 1}, // landscape-left
+    };
+    const float xy[] = {dx, dy, dx + dw, dy, dx, dy + dh, dx + dw, dy + dh};
+    glBindTexture(GL_TEXTURE_2D, src);
+    glVertexPointer(2, GL_FLOAT, 0, xy);
+    glTexCoordPointer(2, GL_FLOAT, 0, uv_rot[gles_rotation()]);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
 
 void gles_present(void) {
     if (gl_tr) {
@@ -800,11 +929,13 @@ void gles_present(void) {
                                   GL_LIGHTING, GL_TEXTURE_2D};
     enum { NCAPS = sizeof(caps) / sizeof(caps[0]) };
     GLboolean on[NCAPS], tca, va, ca, na;
-    GLint tex, mode, active, vp[4];
-    for (int i = 0; i < NCAPS; i++)
-        on[i] = glIsEnabled(caps[i]);
+    GLint tex, mode, active, env_mode, vp[4];
+    // GL_TEXTURE_2D y el modo de env son por unidad: todo se lee y restaura en la unidad 0
     glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
     glActiveTexture(GL_TEXTURE0);
+    for (int i = 0; i < NCAPS; i++)
+        on[i] = glIsEnabled(caps[i]);
+    glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &env_mode);
     glClientActiveTexture(GL_TEXTURE0);
     tca = glIsEnabled(GL_TEXTURE_COORD_ARRAY);
     va = glIsEnabled(GL_VERTEX_ARRAY);
@@ -840,20 +971,9 @@ void gles_present(void) {
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
     glLoadIdentity();
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    int dx, dy, dw, dh;
-    gles_dest_rect(&dx, &dy, &dw, &dh);
-    // Esquinas de pantalla (sup-izq, sup-der, inf-izq, inf-der) -> UV del FBO (v = 0 abajo en GL).
-    static const float uv_rot[3][8] = {
-        {0, 1, 1, 1, 0, 0, 1, 0}, // sin girar
-        {1, 1, 1, 0, 0, 1, 0, 0}, // landscape-right (probado en Inotia2)
-        {0, 0, 0, 1, 1, 0, 1, 1}, // landscape-left
-    };
-    const float xy[] = {dx, dy, dx + dw, dy, dx, dy + dh, dx + dw, dy + dh};
-    glVertexPointer(2, GL_FLOAT, 0, xy);
-    glTexCoordPointer(2, GL_FLOAT, 0, uv_rot[gles_rotation()]);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    draw_screen();
+    if (options_pending())
+        options_run(draw_screen);
     vglSwapBuffers(ime_active());
 
     glPopMatrix();
@@ -893,7 +1013,7 @@ void gles_present(void) {
 const import_entry gles_imports[] = {
     D(glActiveTexture), D(glAlphaFunc), D(glAlphaFuncx), D(glBindTexture), D(glBlendFunc), D(glClear),
     D(glClearColor), D(glClearColorx), D(glClearDepthf), D(glClearDepthx), D(glClearStencil), D(glColorMask),
-    D(glCompressedTexImage2D), D(glCopyTexImage2D), D(glCopyTexSubImage2D),
+    F(glCompressedTexImage2D, g_glCompressedTexImage2D), D(glCopyTexImage2D), D(glCopyTexSubImage2D),
     D(glCullFace), D(glDeleteTextures), D(glDepthFunc), D(glDepthMask), D(glDepthRangef), D(glDepthRangex),
     D(glFinish), D(glFlush), D(glFogf), D(glFogfv), D(glFogx), D(glFogxv), D(glFrontFace), D(glFrustumf),
     D(glFrustumx), D(glGenBuffers), D(glGenTextures), D(glGetError), D(glGetFloatv), D(glGetBooleanv),
@@ -902,7 +1022,7 @@ const import_entry gles_imports[] = {
     F(glLoadMatrixx, g_glLoadMatrixx), D(glMaterialf), D(glMaterialfv), D(glMaterialx), F(glMatrixMode, g_glMatrixMode), F(glMultMatrixf, g_glMultMatrixf),
     F(glMultMatrixx, g_glMultMatrixx), D(glNormal3f), D(glOrthof), D(glOrthox), D(glPixelStorei), D(glPointSize), D(glPolygonOffset), D(glPolygonOffsetx),
     F(glPopMatrix, g_glPopMatrix), F(glPushMatrix, g_glPushMatrix), D(glReadPixels), F(glRotatef, g_glRotatef), F(glRotatex, g_glRotatex), F(glScalef, g_glScalef),
-    F(glScalex, g_glScalex), D(glScissor), D(glShadeModel), D(glStencilFunc), D(glStencilMask), D(glStencilOp), D(glTexImage2D),
+    F(glScalex, g_glScalex), D(glScissor), D(glShadeModel), D(glStencilFunc), D(glStencilMask), D(glStencilOp), F(glTexImage2D, g_glTexImage2D),
     D(glTexParameteri), D(glTexParameteriv), D(glTexSubImage2D), F(glTranslatef, g_glTranslatef),
     F(glTranslatex, g_glTranslatex), D(glViewport), D(glBlendEquation), D(glTexEnvfv), 
     D(glDeleteRenderbuffers), 
