@@ -1,15 +1,34 @@
 <h1 align="center">
-  PES 2011 · PS Vita Port
+  <img src="extras/livearea/pic0.png" alt="Pro Evolution Soccer 2011 PS Vita Banner" width="700"><br>
+  Pro Evolution Soccer 2011 · PS Vita Port
 </h1>
 
 <p align="center">
-  <a href="#-status--playability">Status & Playability</a> •
-  <a href="#setup-instructions-for-players">How to install</a> •
-  <a href="#controls">Controls</a> •
-  <a href="#known-issues">Known Issues</a> •
-  <a href="#build-instructions-for-developers">How to compile</a> •
-  <a href="#credits--acknowledgments">Credits</a>
+  <b>Native port of Pro Evolution Soccer 2011 (Konami) for PlayStation Vita and PlayStation TV.</b>
 </p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-PS%20Vita%20%7C%20PS%20TV-003791.svg?style=flat-square&logo=playstation" alt="Platform" />
+  <img src="https://img.shields.io/badge/Origin-iOS-000000.svg?style=flat-square&logo=apple" alt="Origin" />
+  <img src="https://img.shields.io/badge/Title%20ID-PSVPES11I-ff69b4.svg?style=flat-square" alt="Title ID" />
+  <img src="https://img.shields.io/badge/Engine-Konami%20%28iOS%20native%29-brightgreen.svg?style=flat-square" alt="Engine" />
+  <img src="https://img.shields.io/badge/Renderer-vitaGL%20%28GLES%201.1%29-orange.svg?style=flat-square" alt="Renderer" />
+  <img src="https://img.shields.io/badge/Status-In--game%20%28beta%20v0.1%29-yellow.svg?style=flat-square" alt="Status" />
+</p>
+
+<p align="center">
+  <a href="#-description">Description</a> •
+  <a href="#-features">Features</a> •
+  <a href="#-controls">Controls</a> •
+  <a href="#-installation">Installation</a> •
+  <a href="#-known-issues">Known Issues</a> •
+  <a href="#-building-from-source">Build</a> •
+  <a href="#-credits">Credits</a>
+</p>
+
+---
+
+## 📖 Description
 
 An unofficial, native **iOS-to-PS Vita wrapper port** of *Pro Evolution Soccer 2011* (iOS v1.3.0, originally published by **Konami**). There is no Android `.so` and no JNI here: this port ships its own **Mach-O loader** and **Objective-C runtime** that map the official armv6 iOS executable (`PES2011`, from the 1.3.0 IPA) into PS Vita RAM and replace the Apple frameworks it uses (Foundation, UIKit, OpenGL ES, AudioToolbox/OpenAL, StoreKit stubs) with native implementations on top of **vitaGL**, **OpenAL** and the Vita system libraries.
 
@@ -17,9 +36,9 @@ An unofficial, native **iOS-to-PS Vita wrapper port** of *Pro Evolution Soccer 2
 
 ## 🎮 Status & Playability
 
-**Status: IN-GAME (BETA v0.1)**
-
-The game boots to the title screen, the menus and the team-selection screens work on physical hardware, and a friendly match (Exhibition) can be started. A purple tint on the ball and players during set pieces is still open (see [Known Issues](#known-issues)).
+**Status: In-game (beta v0.1)** — the game boots to the title screen, the menus and the team-selection screens
+work on physical hardware, and a friendly match (Exhibition) can be started. A purple tint on the ball and
+players during set pieces is still open (see [Known Issues](#-known-issues)).
 
 - [x] **Mach-O loader & ObjC runtime**: maps the armv6 image at `0x98000000` with rebase data and import slots generated from the IPA by `tools/ios_prep.py`. *Verified on console.*
 - [x] **Graphics**: OpenGL ES 1.x → **vitaGL** (`SOFTFP_ABI=1`). The game draws a 320×480 portrait framebuffer that is rotated to landscape (default: landscape right) and shown at 960×544 (original aspect with side bars is the default; full screen is an option). *Verified on console.*
@@ -32,41 +51,30 @@ The game boots to the title screen, the menus and the team-selection screens wor
 
 ---
 
-## Disclaimer
+## ✨ Features
 
-**Pro Evolution Soccer** is a registered trademark of **Konami Digital Entertainment**. The work presented in this repository is unofficial and is not produced, endorsed, or sanctioned by Konami or any affiliated entities.
+| Feature | Status | Notes |
+| :--- | :---: | :--- |
+| Boots to gameplay | ✅ | Title screen, menus, team selection and an Exhibition match verified on hardware |
+| Graphics / renderer | 🟡 | vitaGL, GLES 1.x; set-piece purple/red tint still open |
+| Audio & music | 🧪 | AudioFile callbacks (mpg123) over OpenAL; not confirmed on console |
+| Video / cutscenes | ➖ | Not documented in this port |
+| Physical buttons | 🟡 | Cross, Circle and Square verified; Start not confirmed; Triangle, D-pad and shoulder buttons are not mapped |
+| Analog sticks / camera | ✅ | Left stick is a virtual joystick that moves the player |
+| Touch screen | ✅ | Touch input for menus and match |
+| Button remapping / port menu | ✅ | Select + Start options menu (screen size, filter, MSAA, rotation); no button remapping |
+| Save data | 🧪 | Saves go to `Documents/database/save.bin`; not confirmed on console |
+| Native trophies | ➖ | Not implemented |
+| Languages | ➖ | Not documented in this port |
+| Performance | 🧪 | No FPS measurement recorded in this README |
+| Online / IAP / ads | ➖ | StoreKit is stubbed (`source/storekit.c`), so there are no in-app purchases |
+| PS TV | 🧪 | Listed in the platform badge; no separate PS TV test recorded |
 
-This software does NOT contain original game code, binaries, copyrighted graphics, or game assets. The authors do not promote or condone piracy in any way. To play, you must provide your own legally obtained, **decrypted** copy of the iOS `.ipa`.
-
----
-
-## Setup Instructions (For Players)
-
-1. **CFW & Plugins**: PS Vita on Custom Firmware (**Enso 3.60 / 3.65** recommended) with `kubridge` under `*KERNEL` in `ur0:tai/config.txt`:
-   ```ini
-   *KERNEL
-   ur0:tai/kubridge.skprx
-   ```
-2. **Shader Compiler**: `libshacccg.suprx` must be in `ur0:data/` (extract it with **ShaRKBR33D**).
-3. **Game Files**: a decrypted **PES 2011 1.3.0** iOS `.ipa` (FairPlay `cryptid 0`). Open it as a ZIP and extract `Payload/PES2011.app/`. Then run `tools/stage_data.sh` on a PC (see [Build Instructions](#build-instructions-for-developers)): it generates `rebase.bin`, `binds.bin` and the `nib.txt` menu table from the executable, and converts the music to `.ogg` (needs `ffmpeg`). Other versions will not match the generated tables.
-4. **Copy to the Vita** (`ux0:data/pes2011ios/`):
-   ```
-   ux0:data/pes2011ios/
-     game_app/      the contents of Payload/PES2011.app/ (PES2011 executable, data, sounds)
-     rebase.bin     rebase table generated from the executable
-     binds.bin      import table generated from the executable
-     nib.txt        precompiled MainWindow nib (generated by stage_data.sh)
-     nibs/          precompiled view-controller nibs (generated by stage_data.sh)
-     controls.txt   button -> touch mapping, editable without recompiling
-     options.txt    created automatically by the options menu
-     Documents/     created automatically — your save games (Documents/database/save.bin)
-     logs/          created automatically — pes2011ios_NNN.log, one per run
-   ```
-5. **Install VPK**: install `pes2011ios.vpk` (Title ID `PSVPES11I`) with VitaShell.
+Legend: `✅ Working (verified on console) · 🧪 Implemented, not yet verified on console · 🟡 Partial · ❌ Not working · ➖ Not applicable · ❔ Not documented yet`
 
 ---
 
-## Controls
+## 🎯 Controls
 
 Physical buttons are translated into touches at the positions in `ux0:data/pes2011ios/controls.txt` (480×320 game coordinates, origin top-left). Up to 6 lines; edit it over FTP and restart the game to change them.
 
@@ -76,7 +84,7 @@ Physical buttons are translated into touches at the positions in `ux0:data/pes20
 | **Left Stick** | Virtual joystick at (101, 220), radius 45: moves the player | ✅ Working |
 | **Cross (✖)** | Touch at (358, 274) (button A in the game) | ✅ Working |
 | **Circle (●) / Square (◼)** | Touch at (440, 238) (button B in the game) | ✅ Working |
-| **Start** | Touch at (15, 15) (in-game pause) | ⚠️ Not confirmed |
+| **Start** | Touch at (15, 15) (in-game pause) | 🧪 Not confirmed |
 | **Select + Start** | Options menu (see below) | ✅ Working |
 
 > [!TIP]
@@ -97,16 +105,66 @@ Settings are saved to `ux0:data/pes2011ios/options.txt`, which can be edited by 
 
 ---
 
-## Known Issues
+## 📋 Prerequisites
+
+1. **CFW & Plugins**: PS Vita on Custom Firmware (**Enso 3.60 / 3.65** recommended) with `kubridge` under `*KERNEL` in `ur0:tai/config.txt`:
+   ```ini
+   *KERNEL
+   ur0:tai/kubridge.skprx
+   ```
+2. **Shader Compiler**: `libshacccg.suprx` must be in `ur0:data/` (extract it with **ShaRKBR33D**).
+3. **Game Files**: a decrypted **PES 2011 1.3.0** iOS `.ipa` (FairPlay `cryptid 0`). Open it as a ZIP and extract `Payload/PES2011.app/`. Then run `tools/stage_data.sh` on a PC (see [Build Instructions](#-building-from-source)): it generates `rebase.bin`, `binds.bin` and the `nib.txt` menu table from the executable, and converts the music to `.ogg` (needs `ffmpeg`). Other versions will not match the generated tables.
+
+---
+
+## 📦 Installation
+
+1. **Copy to the Vita** (`ux0:data/pes2011ios/`):
+   ```
+   ux0:data/pes2011ios/
+     game_app/      the contents of Payload/PES2011.app/ (PES2011 executable, data, sounds)
+     rebase.bin     rebase table generated from the executable
+     binds.bin      import table generated from the executable
+     nib.txt        precompiled MainWindow nib (generated by stage_data.sh)
+     nibs/          precompiled view-controller nibs (generated by stage_data.sh)
+     controls.txt   button -> touch mapping, editable without recompiling
+     options.txt    created automatically by the options menu
+     Documents/     created automatically — your save games (Documents/database/save.bin)
+     logs/          created automatically — pes2011ios_NNN.log, one per run
+   ```
+2. **Install VPK**: install `pes2011ios.vpk` (Title ID `PSVPES11I`) with VitaShell.
+
+### Final File Structure in `ux0:data/pes2011ios/`
+
+```text
+ux0:data/pes2011ios/
+├── game_app/      <- Payload/PES2011.app contents from the decrypted IPA
+├── rebase.bin     <- Rebase table generated from the executable
+├── binds.bin      <- Import table generated from the executable
+├── nib.txt        <- Precompiled MainWindow nib (stage_data.sh)
+├── nibs/          <- Precompiled view-controller nibs (stage_data.sh)
+├── controls.txt   <- Button -> touch mapping (editable)
+├── options.txt    <- Options menu settings (created automatically)
+├── Documents/     <- Save games (Documents/database/save.bin)
+└── logs/          <- pes2011ios_NNN.log, one per run
+```
+
+### ⚙️ Options
+
+Settings are saved to `ux0:data/pes2011ios/options.txt` by the Select + Start menu (see [Options menu](#options-menu-select--start)). The file can be edited by hand: `filter=bilinear|sharp`, `msaa=0|2|4`, `rotation=0|1|2`, `stretch=0|1`.
+
+---
+
+## 🐛 Known Issues
 
 - **Purple/red set-piece colours**: during kick-offs and corners the ball and players are tinted and the tint does not go away. Console run #8 still showed it after a fix to the texture-unit state in the present path; diagnostic logging was added to chase the state changes. The v0.1 build still writes that `DIAG` logging to the log file.
 - **Audio and saves**: not confirmed on console yet.
 - **Online features disabled**: StoreKit is stubbed (`source/storekit.c`), so there are no in-app purchases.
-- **Crash dumps** are written by the system to `ux0:data/` (not to the game folder). The loader writes its own log to `logs/` for every run.
+- **Logs** are written to `ux0:data/pes2011ios/logs/` for every run. **Crash dumps** are written by the system to `ux0:data/` (not to the game folder).
 
 ---
 
-## Build Instructions (For Developers)
+## 🔨 Building from Source
 
 ### Prerequisites
 
@@ -142,6 +200,25 @@ A crash PC in `0x98xxxxxx` minus `0x98000000` is the address in the Mach-O: look
 
 ---
 
+## 📁 Project Structure
+
+- `source/`: Mach-O loader, Objective-C/UIKit runtime, vitaGL renderer, OpenAL/AudioFile audio layer, StoreKit stubs (`storekit.c`), input.
+- `tools/`: `stage_data.sh`, `ios_prep.py` (rebase and binds tables), `deploy_data.py` (FTP upload / log fetch), `annotate.py`.
+- `vendor/vitaGL/`: vitaGL built from source.
+- `extras/livearea/`: LiveArea assets.
+- `game_app/`: local link to the decrypted `PES2011.app` (never committed).
+- `PORTING_PLAN.md`: Architecture and plan. `port_progress.md`: progress log.
+
+---
+
+## 📜 Disclaimer
+
+**Pro Evolution Soccer** is a registered trademark of **Konami Digital Entertainment**. The work presented in this repository is unofficial and is not produced, endorsed, or sanctioned by Konami or any affiliated entities.
+
+This software does NOT contain original game code, binaries, copyrighted graphics, or game assets. The authors do not promote or condone piracy in any way. To play, you must provide your own legally obtained, **decrypted** copy of the iOS `.ipa`.
+
+---
+
 ## ☕ Support My Work
 
 This project is **free** and will stay free. If you enjoy it, a tip from **$1** helps me keep porting games to the PS Vita:
@@ -163,7 +240,7 @@ This project is **free** and will stay free. If you enjoy it, a tip from **$1** 
 
 ---
 
-## Credits & Acknowledgments
+## 👥 Credits
 
 - **Pro Evolution Soccer 2011** is intellectual property of **Konami Digital Entertainment**.
 - **vitaGL** graphics library by [Rinnegatamante](https://github.com/Rinnegatamante/vitaGL).
@@ -171,3 +248,9 @@ This project is **free** and will stay free. If you enjoy it, a tip from **$1** 
 - **mpg123**, **libvorbis**, **FreeType**, **libpng** and **zlib** projects.
 - The **iOS Mach-O loader** is based on [`ios-loader-boilerplate`](https://github.com/MetalSyntax/ios-loader-boilerplate) and [`Inotia2-vita`](https://github.com/MetalSyntax/Inotia2-vita); the shared iOS runtime and options menu come from [`HAWX-vita`](https://github.com/MetalSyntax/HAWX-vita) and [`Ferrari-GT-Evolution-vita`](https://github.com/MetalSyntax/Ferrari-GT-Evolution-vita).
 - Special thanks to the PS Vita homebrew and porting community.
+
+---
+
+## 📄 License
+
+The loader code is licensed under the MIT license — see the [LICENSE](LICENSE) file (`Copyright (C) 2021 Andy Nguyen`, as stated in that file). The game, its assets and its executable are not distributed with this project.
